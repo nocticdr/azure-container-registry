@@ -211,9 +211,19 @@ ORG="${DOCKER_REPO%%/*}"; REPO="${DOCKER_REPO##*/}"
 
   # Check if the image already exists in ACR
   echo -e "${CYAN}🔍 Checking if image already exists in ACR...${NC}"
-  if az acr repository show-tags --name "$ACR_NAME" --repository "$REPO" --output tsv --query "[?name=='$TARGET_TAG'].name" 2>/dev/null | grep -q "^$TARGET_TAG$"; then
+  
+  # Get all tags for the repository, or empty if repository doesn't exist
+  EXISTING_TAGS=$(az acr repository show-tags --name "$ACR_NAME" --repository "$REPO" --output tsv 2>/dev/null || echo "")
+  
+  if [ -z "$EXISTING_TAGS" ]; then
+    echo -e "${GREEN}✅ Repository ${REPO} does not exist in ACR. Safe to import.${NC}"
+  elif echo "$EXISTING_TAGS" | grep -q "^${TARGET_TAG}$"; then
     echo -e "${YELLOW}⚠ Image ${REPO}:${TARGET_TAG} already exists in ${ACR_NAME}.azurecr.io${NC}"
     echo -e "${BLUE}Current target: ${ACR_NAME}.azurecr.io/${REPO}:${TARGET_TAG}${NC}"
+    echo -e "${CYAN}Existing tags in repository:${NC}"
+    echo "$EXISTING_TAGS" | head -5 | sed 's/^/  - /'
+    [ $(echo "$EXISTING_TAGS" | wc -l) -gt 5 ] && echo "  ... and $(($(echo "$EXISTING_TAGS" | wc -l) - 5)) more"
+    echo
     
     OVERWRITE_CHOICE="$(prompt_default "Do you want to overwrite the existing image? (y/N)" "N")"
     if [[ ! "$OVERWRITE_CHOICE" =~ ^[Yy]$ ]]; then
@@ -223,11 +233,12 @@ ORG="${DOCKER_REPO%%/*}"; REPO="${DOCKER_REPO##*/}"
     fi
     echo -e "${YELLOW}⚠ Proceeding with overwrite...${NC}"
   else
-    echo -e "${GREEN}✅ Image ${REPO}:${TARGET_TAG} does not exist in ACR. Safe to import.${NC}"
+    echo -e "${GREEN}✅ Image ${REPO}:${TARGET_TAG} does not exist in ACR (repository has $(echo "$EXISTING_TAGS" | wc -l) other tags). Safe to import.${NC}"
   fi
 
   echo
   echo -e "${BLUE}📦 Importing docker.io/${DOCKER_REPO}:${SRC_TAG} → ${ACR_NAME}.azurecr.io/${REPO}:${TARGET_TAG}${NC}"
+  
   set +e
   if [[ "$IS_PRIVATE" =~ ^[Yy]$ ]]; then
     az acr import --name "$ACR_NAME" \
