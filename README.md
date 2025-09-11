@@ -2,6 +2,29 @@
 
 A comprehensive interactive bash script for importing Docker images from Docker Hub to Azure Container Registry (ACR) or GitHub Container Registry (GHCR). The script provides an intuitive interface for selecting Docker tags and seamlessly migrating container images between registries.
 
+## 🎨 Visual Interface
+
+When you run the script, you'll be greeted with this beautiful ASCII art banner:
+
+```
+╔════════════════════════════════════════════════════════════════════════╗
+║                                                                        ║
+║           ██████╗  ██████╗  ██████╗██╗  ██╗███████╗██████╗             ║
+║           ██╔══██╗██╔═══██╗██╔════╝██║ ██╔╝██╔════╝██╔══██╗            ║
+║           ██║  ██║██║   ██║██║     █████╔╝ █████╗  ██████╔╝            ║
+║           ██║  ██║██║   ██║██║     ██╔═██╗ ██╔══╝  ██╔══██╗            ║
+║           ██████╔╝╚██████╔╝╚██████╗██║  ██╗███████╗██║  ██║            ║
+║           ╚═════╝  ╚═════╝  ╚═════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝            ║
+║                                                                        ║
+║                        IMAGE IMPORTER v2.0                             ║
+║                                                                        ║
+║     🐳 Docker Hub  ──➤  📦 Container Registry  ──➤ ✅ Success          ║
+║                                                                        ║
+║        Migrate container images from Docker Hub to ACR/GHCR            ║
+║                                                                        ║
+╚════════════════════════════════════════════════════════════════════════╝
+```
+
 ## 🚀 Features
 
 - **Dual Registry Support**: Import to both Azure Container Registry (ACR) and GitHub Container Registry (GHCR)
