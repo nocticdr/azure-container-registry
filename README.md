@@ -1,7 +1,5 @@
 # Docker Image Importer v2.0
 
-A comprehensive interactive bash script for importing Docker images from Docker Hub to Azure Container Registry (ACR) or GitHub Container Registry (GHCR). The script provides an intuitive interface for selecting Docker tags and seamlessly migrating container images between registries.
-
 ```
 ╔════════════════════════════════════════════════════════════════════════╗
 ║                                                                        ║
@@ -20,6 +18,8 @@ A comprehensive interactive bash script for importing Docker images from Docker 
 ║                                                                        ║
 ╚════════════════════════════════════════════════════════════════════════╝
 ```
+
+A comprehensive interactive bash script for importing Docker images from Docker Hub to Azure Container Registry (ACR) or GitHub Container Registry (GHCR). The script provides an intuitive interface for selecting Docker tags and seamlessly migrating container images between registries.
 
 ## 🚀 Features
 
