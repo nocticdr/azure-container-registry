@@ -12,7 +12,7 @@
 ║                                                                        ║
 ║                        IMAGE IMPORTER v2.0                             ║
 ║                                                                        ║
-║     🐳 Docker Hub  ──➤  📦 Container Registry  ──➤ ✅ Success          ║
+║     🐳 Docker Hub  ──➤  📦 Container Registry  ──➤ ✅ Success           ║
 ║                                                                        ║
 ║        Migrate container images from Docker Hub to ACR/GHCR            ║
 ║                                                                        ║
