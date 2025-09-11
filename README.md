@@ -82,13 +82,13 @@ The script automatically saves the following in `.nexops_import_env`:
 
 ```bash
 # Make the script executable
-chmod +x docker_importer.sh
+chmod +x docker_to_acr_importer.sh
 
 # Run the script
-./docker_importer.sh
+./docker_to_acr_importer.sh
 
 # Or source it to keep environment variables active
-source ./docker_importer.sh
+source ./docker_to_acr_importer.sh
 ```
 
 ### 2. Follow the Interactive Prompts
@@ -190,10 +190,10 @@ For multiple imports, the script will remember your choices:
 
 ```bash
 # First run - will prompt for all details
-./docker_importer.sh
+./docker_to_acr_importer.sh
 
 # Subsequent runs - will use saved choices, only prompt for tag selection
-./docker_importer.sh
+./docker_to_acr_importer.sh
 ```
 
 ### Sourcing the Script
@@ -201,7 +201,7 @@ For multiple imports, the script will remember your choices:
 To keep environment variables active in your shell:
 
 ```bash
-source ./docker_importer.sh
+source ./docker_to_acr_importer.sh
 # Environment variables are now available in your current shell
 echo $DOCKER_REPO
 echo $ACR_NAME
@@ -266,7 +266,7 @@ The script uses "v" as the default prefix for ACR tags. To change this:
 ```bash
 # Set in environment before running
 export TAG_PREFIX_IN_ACR="release-"
-./docker_importer.sh
+./docker_to_acr_importer.sh
 ```
 
 ### Modifying Number of Tags Displayed
