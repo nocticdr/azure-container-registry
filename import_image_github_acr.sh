@@ -36,6 +36,24 @@ trap on_int  INT
 trap on_term TERM
 trap on_exit EXIT
 
+echo "╔════════════════════════════════════════════════════════════════════════╗"
+echo "║                                                                        ║"
+echo "║           ██████╗  ██████╗  ██████╗██╗  ██╗███████╗██████╗             ║"
+echo "║           ██╔══██╗██╔═══██╗██╔════╝██║ ██╔╝██╔════╝██╔══██╗            ║"
+echo "║           ██║  ██║██║   ██║██║     █████╔╝ █████╗  ██████╔╝            ║"
+echo "║           ██║  ██║██║   ██║██║     ██╔═██╗ ██╔══╝  ██╔══██╗            ║"
+echo "║           ██████╔╝╚██████╔╝╚██████╗██║  ██╗███████╗██║  ██║            ║"
+echo "║           ╚═════╝  ╚═════╝  ╚═════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝            ║"
+echo "║                                                                        ║"
+echo "║                        IMAGE IMPORTER v2.0                             ║"
+echo "║                                                                        ║"
+echo "║     🐳 Docker Hub  ──➤  📦 Container Registry  ──➤ ✅ Success          ║"
+echo "║                                                                        ║"
+echo "║        Migrate container images from Docker Hub to ACR/GHCR            ║"
+echo "║                                                                        ║"
+echo "╚════════════════════════════════════════════════════════════════════════╝"
+echo
+
 # ---- tip shown before first prompt ----
 echo -e "${CYAN}💡 Note:${NC} Saved choices are kept in ${ENV_FILE}."
 echo -e "   To reset them: run ${BLUE}rm ${ENV_FILE}${NC} and rerun this script."
@@ -152,7 +170,6 @@ fi
     echo -e "${RED}Invalid choice${NC}"
   done
   SRC_TAG="${TROWS[$((choice-1))]}"
-fi
 
 echo
 echo -e "${BLUE}🎯 Destination registry${NC}"
@@ -185,12 +202,29 @@ if [ "$DEST" = "1" ]; then
     exit 1
   fi
 
-  ORG="${DOCKER_REPO%%/*}"; REPO="${DOCKER_REPO##*/}"
+ORG="${DOCKER_REPO%%/*}"; REPO="${DOCKER_REPO##*/}"
   TARGET_TAG_PREFIX="${TAG_PREFIX_IN_ACR:-v}"   # default "v" unless overridden from env
   TARGET_TAG_PREFIX="${TARGET_TAG_PREFIX:-v}"   # fallback to v if unset/empty
   persist_env "TAG_PREFIX_IN_ACR" "$TARGET_TAG_PREFIX"
 
   TARGET_TAG="${TARGET_TAG_PREFIX}${SRC_TAG}"
+
+  # Check if the image already exists in ACR
+  echo -e "${CYAN}🔍 Checking if image already exists in ACR...${NC}"
+  if az acr repository show-tags --name "$ACR_NAME" --repository "$REPO" --output tsv --query "[?name=='$TARGET_TAG'].name" 2>/dev/null | grep -q "^$TARGET_TAG$"; then
+    echo -e "${YELLOW}⚠ Image ${REPO}:${TARGET_TAG} already exists in ${ACR_NAME}.azurecr.io${NC}"
+    echo -e "${BLUE}Current target: ${ACR_NAME}.azurecr.io/${REPO}:${TARGET_TAG}${NC}"
+    
+    OVERWRITE_CHOICE="$(prompt_default "Do you want to overwrite the existing image? (y/N)" "N")"
+    if [[ ! "$OVERWRITE_CHOICE" =~ ^[Yy]$ ]]; then
+      echo -e "${CYAN}📋 Import cancelled. No changes made.${NC}"
+      explain_env_persistence
+      exit 0
+    fi
+    echo -e "${YELLOW}⚠ Proceeding with overwrite...${NC}"
+  else
+    echo -e "${GREEN}✅ Image ${REPO}:${TARGET_TAG} does not exist in ACR. Safe to import.${NC}"
+  fi
 
   echo
   echo -e "${BLUE}📦 Importing docker.io/${DOCKER_REPO}:${SRC_TAG} → ${ACR_NAME}.azurecr.io/${REPO}:${TARGET_TAG}${NC}"
