@@ -122,68 +122,19 @@ fi
 persist_env "IS_PRIVATE" "$IS_PRIVATE"
 
 echo
+
 echo -e "${BLUE}🔖 Choose a tag to import${NC}"
-USE_GH_RELEASES="${USE_GH_RELEASES:-$(prompt_default "Fetch versions from GitHub releases? (y/N)" "N")}"
-
-TAGS_JSON=""
-if [[ "$USE_GH_RELEASES" =~ ^[Yy]$ ]]; then
-  GITHUB_REPO="${GITHUB_REPO:-$(prompt_default "GitHub repo for releases (org/repo)" "")}"
-  while [[ ! "$GITHUB_REPO" =~ .+/.+ ]]; do
-    echo -e "${RED}Please use the form org/repo${NC}"
-    GITHUB_REPO="$(prompt_default "GitHub repo for releases (org/repo)" "")"
-  done
-  persist_env "GITHUB_REPO" "$GITHUB_REPO"
-
-  GITHUB_TOKEN="${GITHUB_TOKEN:-${GITHUB_TOKEN:-}}"
-  if [ -z "${GITHUB_TOKEN:-}" ]; then
-    echo "Optional: set GITHUB_TOKEN for higher rate limits (press Enter to skip)."
-    GITHUB_TOKEN="$(prompt_default "GITHUB_TOKEN" "")"
-    [ -n "$GITHUB_TOKEN" ] && persist_env "GITHUB_TOKEN" "$GITHUB_TOKEN"
-  fi
-  auth_hdr=()
-  [ -n "${GITHUB_TOKEN:-}" ] && auth_hdr=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
-
-  echo -e "${CYAN}⏬ Fetching latest releases from GitHub...${NC}"
-  RELEASES="$(curl -fsSL "${auth_hdr[@]}" "https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=25")" \
-    || { echo -e "${RED}Failed to fetch GitHub releases${NC}"; exit 1; }
-  mapfile -t ROWS < <(echo "$RELEASES" | jq -r '.[] | select(.tag_name!=null and .published_at!=null)
-     | [.tag_name, (.name // .tag_name), .published_at] | @tsv')
-  [ "${#ROWS[@]}" -gt 0 ] || { echo -e "${RED}No releases found${NC}"; exit 1; }
-
-  echo
-  printf "┌────┬────────────────────┬────────────┬──────────────────────────┐\n"
-  printf "│ #  │ Tag                │ Date       │ Name                     │\n"
-  printf "├────┼────────────────────┼────────────┼──────────────────────────┤\n"
-  i=1
-  for r in "${ROWS[@]}"; do
-    tag="$(cut -f1 <<<"$r")"; nm="$(cut -f2 <<<"$r")"; dt="$(cut -f3 <<<"$r")"
-    shortdt="${dt:0:10}"; shortnm="$(printf '%s' "$nm" | cut -c1-24)"; [ "${#nm}" -gt 24 ] && shortnm="${shortnm}..."
-    printf "│ %-2d │ %-18s │ %-10s │ %-34s │\n" "$i" "$tag" "$shortdt" "$shortnm"
-    i=$((i+1))
-    [ $i -le 20 ] || break
-  done
-  printf "└────┴────────────────────┴────────────┴──────────────────────────┘\n"
-  while :; do
-    read -r -p "Select a release (1-$((i-1))): " choice
-    [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -lt "$i" ] && break
-    echo -e "${RED}Invalid choice${NC}"
-  done
-  SEL_ROW="${ROWS[$((choice-1))]}"
-  RAW_TAG="$(cut -f1 <<<"$SEL_ROW")"
-  # Normalize: source tag on Docker Hub usually equals the release tag; strip leading v for safety if needed
-  SRC_TAG="${RAW_TAG#v}"
-else
-  echo -e "${CYAN}⏬ Fetching tags from Docker Hub...${NC}"
-  ORG="${DOCKER_REPO%%/*}"; REPO="${DOCKER_REPO##*/}"
+echo -e "${CYAN}⏬ Fetching tags from Docker Hub...${NC}"
+ORG="${DOCKER_REPO%%/*}"; REPO="${DOCKER_REPO##*/}"
   # Docker Hub tags API
-  if [[ "$IS_PRIVATE" =~ ^[Yy]$ ]]; then
+if [[ "$IS_PRIVATE" =~ ^[Yy]$ ]]; then
     AUTH_HEADER="Authorization: Bearer $(curl -fsSL \
-      -H "Content-Type: application/json" \
-      -d "{\"username\":\"${DOCKERHUB_USERNAME}\",\"password\":\"${DOCKERHUB_TOKEN}\"}" \
-      https://hub.docker.com/v2/users/login/ | jq -r .token)"
-  else
+    -H "Content-Type: application/json" \
+    -d "{\"username\":\"${DOCKERHUB_USERNAME}\",\"password\":\"${DOCKERHUB_TOKEN}\"}" \
+    https://hub.docker.com/v2/users/login/ | jq -r .token)"
+else
     AUTH_HEADER=""
-  fi
+fi
   TAGS="$(curl -fsSL ${AUTH_HEADER:+-H "$AUTH_HEADER"} "https://hub.docker.com/v2/repositories/${ORG}/${REPO}/tags/?page_size=50")" \
     || { echo -e "${RED}Failed to fetch Docker Hub tags${NC}"; exit 1; }
   mapfile -t TROWS < <(echo "$TAGS" | jq -r '.results[]?.name' | grep -vE '^[0-9a-f]{12}$' | head -n 20)
