@@ -1,243 +1,315 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Interactive image importer: Docker Hub (source) -> ACR or GHCR (dest)
+# Requires: curl, jq; plus az (for ACR path) and/or docker (for GHCR path)
+# Bash 3.x+ compatible
 
-# Script to fetch latest Docker image versions from GitHub releases and import selected version to ACR
-# Requires: curl, jq, az cli
-# Compatible with bash 3.x and newer
+# ---- trap setup (drop-in) ----
+set -Euo pipefail   # (keep your safety flags)
+# set -o errtrace   # optional: if you want ERR to propagate into functions/subshells
 
-set -e
+RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'; BLUE=$'\033[0;34m'; CYAN=$'\033[0;36m'; NC=$'\033[0m'
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+ENV_FILE=".nexops_import_env"
+VARS_TO_CLEAR=(DOCKER_REPO IS_PRIVATE DOCKERHUB_USERNAME DOCKERHUB_TOKEN \
+  GITHUB_REPO GITHUB_TOKEN ACR_NAME TAG_PREFIX_IN_ACR GHCR_NAMESPACE \
+  GHCR_REPO GHCR_USER GHCR_TOKEN)
 
-# Configuration
-ACR_NAME="your-acr-name"                    # Replace with your Azure Container Registry name
-DOCKER_REPO="organization/repository"       # Replace with your Docker Hub repository
-GITHUB_REPO="organization/repository"       # Replace with your GitHub repository
+_cleared=0
+clear_envs_once() {
+  # prevent re-entry and stop any further traps from firing
+  (( _cleared )) && return
+  _cleared=1
+  trap - ERR INT TERM EXIT
 
-echo -e "${BLUE}🔍 Fetching latest versions from GitHub releases...${NC}"
-
-# Check bash version
-if [ -z "$BASH_VERSION" ]; then
-    echo -e "${RED}❌ This script requires bash. Please run with: bash $0${NC}"
-    exit 1
-fi
-
-# Check if required tools are installed
-for tool in curl jq az; do
-    if ! command -v $tool &> /dev/null; then
-        echo -e "${RED}❌ Error: $tool is not installed${NC}"
-        exit 1
-    fi
-done
-
-# Check if logged in to Azure
-echo "Checking Azure CLI authentication..."
-if ! az account show &>/dev/null; then
-    echo -e "${RED}❌ Not logged in to Azure CLI. Please run 'az login' first.${NC}"
-    exit 1
-fi
-
-# Check if ACR exists and is accessible
-echo "Verifying ACR access..."
-if ! az acr show --name "$ACR_NAME" &>/dev/null; then
-    echo -e "${RED}❌ Cannot access ACR '$ACR_NAME'. Please check permissions.${NC}"
-    exit 1
-fi
-
-# Fetch existing tags from ACR
-echo "Checking existing images in ACR..."
-# Extract repository name from DOCKER_REPO (e.g., "org/repo" -> "repo")
-REPO_NAME=$(echo "$DOCKER_REPO" | cut -d'/' -f2)
-# existing_tags=$(az acr repository show-tags --name "$ACR_NAME" --repository "$REPO_NAME" --output tsv --query "[].name" 2>/dev/null || echo "")
-existing_tags=$(az acr repository show-tags --name "$ACR_NAME" --repository "$REPO_NAME" --output tsv)
-# Function to check if tag exists in ACR (using grep instead of associative arrays)
-check_acr_tag() {
-    local tag="$1"
-    if echo "$existing_tags" | grep -q "^${tag}$"; then
-        echo "EXISTS"
-    else
-        echo "Missing"
-    fi
+  printf '\033[1;33m⚠ Clearing saved environment variables...\033[0m\n'
+  for v in "${VARS_TO_CLEAR[@]}"; do unset "$v" 2>/dev/null || true; done
+  [ -f "$ENV_FILE" ] && rm -f "$ENV_FILE"
 }
 
-# Function to get colored status
-get_colored_status() {
-    local status="$1"
-    if [ "$status" = "EXISTS" ]; then
-        echo -e "${GREEN}✓ EXISTS${NC}"
-    else
-        echo -e "${RED}✗ Missing${NC}"
-    fi
+on_err()  { clear_envs_once; exit 1; }   # script error
+on_int()  { clear_envs_once; exit 130; } # Ctrl+C
+on_term() { clear_envs_once; exit 143; } # SIGTERM
+on_exit() { trap - ERR INT TERM EXIT; }  # do nothing on clean exit
+
+trap on_err  ERR
+trap on_int  INT
+trap on_term TERM
+trap on_exit EXIT
+
+# ---- tip shown before first prompt ----
+echo -e "${CYAN}💡 Note:${NC} Saved choices are kept in ${ENV_FILE}."
+echo -e "   To reset them: run ${BLUE}rm ${ENV_FILE}${NC} and rerun this script."
+echo -e "   If the script fails, saved values will be cleared automatically."
+echo
+
+is_sourced() {
+  # Returns 0 if the script is sourced, 1 if executed
+  # shellcheck disable=SC2128
+  [[ "${BASH_SOURCE[0]}" != "$0" ]]
 }
 
-# Fetch latest releases from GitHub API
-echo "Fetching releases from GitHub..."
-releases_json=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=10")
+need() { command -v "$1" >/dev/null || { echo "${RED}❌ Missing dependency: $1${NC}"; exit 1; }; }
 
-if [ $? -ne 0 ]; then
-    echo -e "${RED}❌ Failed to fetch releases from GitHub${NC}"
-    exit 1
+persist_env() {
+  local name="$1" value="$2"
+  # Export to current shell if sourced
+  if is_sourced; then
+    export "$name=$value"
+  fi
+  # Write to env file for later reuse
+  grep -vE "^${name}=" "$ENV_FILE" 2>/dev/null > "${ENV_FILE}.tmp" || true
+  mv "${ENV_FILE}.tmp" "$ENV_FILE" 2>/dev/null || true
+  printf "%s=%q\n" "$name" "$value" >> "$ENV_FILE"
+}
+
+explain_env_persistence() {
+  echo
+  echo -e "${CYAN}📂 Saved your choices to ${ENV_FILE}.${NC}"
+  if is_sourced; then
+    echo -e "${GREEN}✔ Env vars are active in this shell session.${NC}"
+  else
+    echo -e "${YELLOW}⚠ This script was executed (not sourced), so env vars are not active in your shell.${NC}"
+    echo -e "   Load them with: ${BLUE}source ${ENV_FILE}${NC}"
+  fi
+  echo "To change a value: edit ${ENV_FILE} or rerun this script and overwrite."
+  echo "To clear everything: rm ${ENV_FILE}"
+  echo
+}
+
+prompt_default() {
+  local prompt="$1" default="${2:-}"
+  local answer
+  if [ -n "${default}" ]; then
+    read -r -p "$prompt [$default]: " answer || true
+    echo "${answer:-$default}"
+  else
+    read -r -p "$prompt: " answer || true
+    echo "$answer"
+  fi
+}
+
+# Load existing environment if available
+if [ -f "$ENV_FILE" ]; then
+  echo -e "${CYAN}📂 Loading saved choices from ${ENV_FILE}${NC}"
+  set -a  # automatically export all variables
+  source "$ENV_FILE"
+  set +a
 fi
 
-# Check if we got valid JSON
-if ! echo "$releases_json" | jq empty 2>/dev/null; then
-    echo -e "${RED}❌ Invalid response from GitHub API${NC}"
-    exit 1
-fi
+echo -e "${BLUE}🐳 Source: Docker Hub repository${NC}"
+need curl; need jq
 
-# Extract version info and format for display
-echo "Processing release data..."
-versions_data=$(echo "$releases_json" | jq -r '
-    .[:5] | 
-    map(select(.tag_name != null and .published_at != null)) |
-    .[] | 
-    [.tag_name, .published_at, .name // .tag_name] | 
-    @tsv
-')
+DOCKER_REPO="${DOCKER_REPO:-$(prompt_default "Enter Docker Hub repo (org/repo)" "")}"
+while [[ ! "$DOCKER_REPO" =~ .+/.+ ]]; do
+  echo -e "${RED}Please use the form org/repo${NC}"
+  DOCKER_REPO="$(prompt_default "Enter Docker Hub repo (org/repo)" "")"
+done
+persist_env "DOCKER_REPO" "$DOCKER_REPO"
 
-if [ -z "$versions_data" ]; then
-    echo -e "${RED}❌ No valid releases found${NC}"
-    exit 1
-fi
-
-# Display table header
-echo
-echo -e "${GREEN}📋 Latest 5 versions from $GITHUB_REPO:${NC}"
-echo "┌────┬─────────────┬─────────────┬────────────┬────────────────────────┐"
-echo "│ #  │ Version     │ Date        │ In ACR     │ Release Name           │"
-echo "├────┼─────────────┼─────────────┼────────────┼────────────────────────┤"
-
-# Process and display versions
-declare -a versions
-declare -a dates
-declare -a names
-declare -a acr_status
-counter=1
-
-while IFS=$'\t' read -r version date name; do
-    if [ $counter -le 5 ]; then
-        # Format date (convert from ISO to readable format)
-        formatted_date=$(date -d "$date" +"%Y-%m-%d" 2>/dev/null || echo "${date:0:10}")
-        
-        # Check if version exists in ACR
-        acr_exists=$(check_acr_tag "v$version")
-        acr_colored=$(get_colored_status "$acr_exists")
-        
-        # Truncate name if too long
-        truncated_name=$(echo "$name" | cut -c1-22)
-        if [ ${#name} -gt 22 ]; then
-            truncated_name="${truncated_name}..."
-        fi
-        
-        printf "│ %-2d │ %-11s │ %-11s │ " "$counter" "$version" "$formatted_date"
-        printf "%b%-12s%b │ %-22s │\n" "$([ "$acr_exists" = "EXISTS" ] && echo -e "${GREEN}" || echo -e "${RED}")" "$([ "$acr_exists" = "EXISTS" ] && echo "✓ EXISTS" || echo "✗ Missing")" "$NC" "$truncated_name"
-        
-        versions[counter]="$version"
-        dates[counter]="$formatted_date"
-        names[counter]="$name"
-        acr_status[counter]="$acr_exists"
-        
-        ((counter++))
-    fi
-done <<< "$versions_data"
-
-echo "└────┴─────────────┴─────────────┴──────────────┴────────────────────────┘"
-echo
-
-# Show ACR repository info
-echo -e "${CYAN}📦 ACR Repository: $ACR_NAME.azurecr.io/$REPO_NAME${NC}"
-if [ -n "$existing_tags" ]; then
-    tag_count=$(echo "$existing_tags" | wc -l)
-    echo -e "${CYAN}📊 Currently stored versions: $tag_count${NC}"
+IS_PRIVATE="${IS_PRIVATE:-$(prompt_default "Is the Docker Hub repo private? (y/N)" "N")}"
+if [[ "$IS_PRIVATE" =~ ^[Yy]$ ]]; then
+  DOCKERHUB_USERNAME="${DOCKERHUB_USERNAME:-$(prompt_default "Docker Hub username" "")}"
+  DOCKERHUB_TOKEN="${DOCKERHUB_TOKEN:-$(prompt_default "Docker Hub access token/password (will be stored in ${ENV_FILE})" "")}"
+  if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ]; then
+    echo -e "${RED}Private repo requires username and token.${NC}"; exit 1;
+  fi
+  persist_env "DOCKERHUB_USERNAME" "$DOCKERHUB_USERNAME"
+  persist_env "DOCKERHUB_TOKEN" "$DOCKERHUB_TOKEN"
 else
-    echo -e "${YELLOW}⚠️  No $REPO_NAME images found in ACR${NC}"
+  persist_env "DOCKERHUB_USERNAME" ""
+  persist_env "DOCKERHUB_TOKEN" ""
 fi
-echo
+persist_env "IS_PRIVATE" "$IS_PRIVATE"
 
-# Prompt user for selection
-while true; do
-    echo -e "${YELLOW}Please select a version to import (1-5, or 'q' to quit):${NC}"
-    read -p "Enter your choice: " choice
-    
-    case $choice in
-        [1-5])
-            if [ -n "${versions[$choice]}" ]; then
-                selected_version="${versions[$choice]}"
-                selected_date="${dates[$choice]}"
-                selected_name="${names[$choice]}"
-                selected_acr_status="${acr_status[$choice]}"
-                break
-            else
-                echo -e "${RED}❌ Invalid selection. Please try again.${NC}"
-            fi
-            ;;
-        [qQ])
-            echo -e "${YELLOW}👋 Exiting...${NC}"
-            exit 0
-            ;;
-        *)
-            echo -e "${RED}❌ Invalid input. Please enter 1-5 or 'q' to quit.${NC}"
-            ;;
-    esac
+echo
+echo -e "${BLUE}🔖 Choose a tag to import${NC}"
+USE_GH_RELEASES="${USE_GH_RELEASES:-$(prompt_default "Fetch versions from GitHub releases? (y/N)" "N")}"
+
+TAGS_JSON=""
+if [[ "$USE_GH_RELEASES" =~ ^[Yy]$ ]]; then
+  GITHUB_REPO="${GITHUB_REPO:-$(prompt_default "GitHub repo for releases (org/repo)" "")}"
+  while [[ ! "$GITHUB_REPO" =~ .+/.+ ]]; do
+    echo -e "${RED}Please use the form org/repo${NC}"
+    GITHUB_REPO="$(prompt_default "GitHub repo for releases (org/repo)" "")"
+  done
+  persist_env "GITHUB_REPO" "$GITHUB_REPO"
+
+  GITHUB_TOKEN="${GITHUB_TOKEN:-${GITHUB_TOKEN:-}}"
+  if [ -z "${GITHUB_TOKEN:-}" ]; then
+    echo "Optional: set GITHUB_TOKEN for higher rate limits (press Enter to skip)."
+    GITHUB_TOKEN="$(prompt_default "GITHUB_TOKEN" "")"
+    [ -n "$GITHUB_TOKEN" ] && persist_env "GITHUB_TOKEN" "$GITHUB_TOKEN"
+  fi
+  auth_hdr=()
+  [ -n "${GITHUB_TOKEN:-}" ] && auth_hdr=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
+
+  echo -e "${CYAN}⏬ Fetching latest releases from GitHub...${NC}"
+  RELEASES="$(curl -fsSL "${auth_hdr[@]}" "https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=25")" \
+    || { echo -e "${RED}Failed to fetch GitHub releases${NC}"; exit 1; }
+  mapfile -t ROWS < <(echo "$RELEASES" | jq -r '.[] | select(.tag_name!=null and .published_at!=null)
+     | [.tag_name, (.name // .tag_name), .published_at] | @tsv')
+  [ "${#ROWS[@]}" -gt 0 ] || { echo -e "${RED}No releases found${NC}"; exit 1; }
+
+  echo
+  printf "┌────┬────────────────────┬────────────┬──────────────────────────┐\n"
+  printf "│ #  │ Tag                │ Date       │ Name                     │\n"
+  printf "├────┼────────────────────┼────────────┼──────────────────────────┤\n"
+  i=1
+  for r in "${ROWS[@]}"; do
+    tag="$(cut -f1 <<<"$r")"; nm="$(cut -f2 <<<"$r")"; dt="$(cut -f3 <<<"$r")"
+    shortdt="${dt:0:10}"; shortnm="$(printf '%s' "$nm" | cut -c1-24)"; [ "${#nm}" -gt 24 ] && shortnm="${shortnm}..."
+    printf "│ %-2d │ %-18s │ %-10s │ %-34s │\n" "$i" "$tag" "$shortdt" "$shortnm"
+    i=$((i+1))
+    [ $i -le 20 ] || break
+  done
+  printf "└────┴────────────────────┴────────────┴──────────────────────────┘\n"
+  while :; do
+    read -r -p "Select a release (1-$((i-1))): " choice
+    [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -lt "$i" ] && break
+    echo -e "${RED}Invalid choice${NC}"
+  done
+  SEL_ROW="${ROWS[$((choice-1))]}"
+  RAW_TAG="$(cut -f1 <<<"$SEL_ROW")"
+  # Normalize: source tag on Docker Hub usually equals the release tag; strip leading v for safety if needed
+  SRC_TAG="${RAW_TAG#v}"
+else
+  echo -e "${CYAN}⏬ Fetching tags from Docker Hub...${NC}"
+  ORG="${DOCKER_REPO%%/*}"; REPO="${DOCKER_REPO##*/}"
+  # Docker Hub tags API
+  if [[ "$IS_PRIVATE" =~ ^[Yy]$ ]]; then
+    AUTH_HEADER="Authorization: Bearer $(curl -fsSL \
+      -H "Content-Type: application/json" \
+      -d "{\"username\":\"${DOCKERHUB_USERNAME}\",\"password\":\"${DOCKERHUB_TOKEN}\"}" \
+      https://hub.docker.com/v2/users/login/ | jq -r .token)"
+  else
+    AUTH_HEADER=""
+  fi
+  TAGS="$(curl -fsSL ${AUTH_HEADER:+-H "$AUTH_HEADER"} "https://hub.docker.com/v2/repositories/${ORG}/${REPO}/tags/?page_size=50")" \
+    || { echo -e "${RED}Failed to fetch Docker Hub tags${NC}"; exit 1; }
+  mapfile -t TROWS < <(echo "$TAGS" | jq -r '.results[]?.name' | grep -vE '^[0-9a-f]{12}$' | head -n 20)
+  [ "${#TROWS[@]}" -gt 0 ] || { echo -e "${RED}No tags found on Docker Hub${NC}"; exit 1; }
+
+  echo
+  printf "┌────┬──────────────────────────────────────┐\n"
+  printf "│ #  │ Tag                                  │\n"
+  printf "├────┼──────────────────────────────────────┤\n"
+  j=1; for t in "${TROWS[@]}"; do printf "│ %-2d │ %-36s │\n" "$j" "$t"; j=$((j+1)); done
+  printf "└────┴──────────────────────────────────────┘\n"
+  while :; do
+    read -r -p "Select a tag (1-$((j-1))): " choice
+    [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -lt "$j" ] && break
+    echo -e "${RED}Invalid choice${NC}"
+  done
+  SRC_TAG="${TROWS[$((choice-1))]}"
+fi
+
+echo
+echo -e "${BLUE}🎯 Destination registry${NC}"
+echo "1) Azure Container Registry (ACR)"
+echo "2) GitHub Container Registry (GHCR)"
+while :; do
+  read -r -p "Choose destination [1/2]: " DEST
+  [[ "$DEST" == "1" || "$DEST" == "2" ]] && break
+  echo -e "${RED}Please choose 1 or 2${NC}"
 done
 
-selected_version_append_v="v$selected_version"
+if [ "$DEST" = "1" ]; then
+  # ACR path
+  need az
+  ACR_NAME="${ACR_NAME:-$(prompt_default "Enter ACR name (without .azurecr.io)" "")}"
+  while [ -z "$ACR_NAME" ]; do ACR_NAME="$(prompt_default "Enter ACR name (without .azurecr.io)" "")"; done
+  persist_env "ACR_NAME" "$ACR_NAME"
 
-echo
-echo -e "${GREEN}✅ Selected version: $selected_version${NC}"
-echo -e "${GREEN}📅 Release date: $selected_date${NC}"
-echo -e "${GREEN}📝 Release name: $selected_name${NC}"
+  echo -e "${CYAN}🔎 Checking Azure CLI authentication...${NC}"
+  if ! az account show >/dev/null 2>&1; then
+    echo -e "${YELLOW}⚠ Not logged in to Azure.${NC}"
+    echo -e "${BLUE}👉 Opening interactive login...${NC}"
+    az login || { echo -e "${RED}❌ Azure login failed. Exiting.${NC}"; exit 1; }
+  fi
 
-# Check if already exists
-if [ "$selected_acr_status" = "EXISTS" ]; then
-    echo -e "${YELLOW}⚠️  This version already exists in ACR!${NC}"
-    echo -e "${YELLOW}🤔 Do you want to re-import it anyway? This will overwrite the existing image. (y/N)${NC}"
-    read -p "Confirm overwrite: " confirm
-else
-    echo -e "${BLUE}ℹ️  This version is not in ACR yet.${NC}"
-    echo -e "${YELLOW}🤔 Do you want to import this version to ACR '$ACR_NAME'? (y/N)${NC}"
-    read -p "Confirm import: " confirm
-fi
-
-case $confirm in
-    [yY]|[yY][eE][sS])
-        echo -e "${BLUE}🚀 Starting import...${NC}"
-        ;;
-    *)
-        echo -e "${YELLOW}👋 Import cancelled.${NC}"
-        exit 0
-        ;;
-esac
-
-# Perform the import
-echo -e "${BLUE}📦 Importing $REPO_NAME:$selected_version_append_v to $ACR_NAME...${NC}"
-
-import_command="az acr import --name $ACR_NAME --source docker.io/$DOCKER_REPO:$selected_version --image $REPO_NAME:$selected_version_append_v"
-
-echo "Executing: $import_command"
-echo
-
-if eval "$import_command"; then
-    echo
-    echo -e "${GREEN}✅ Successfully imported $REPO_NAME:$selected_version_append_v to ACR!${NC}"
-    echo
-    echo -e "${GREEN}📋 Summary:${NC}"
-    echo "   • Source: docker.io/$DOCKER_REPO:$selected_version"
-    echo "   • Target: $ACR_NAME.azurecr.io/$REPO_NAME:$selected_version_append_v"
-    echo "   • Release: $selected_name"
-    echo "   • Date: $selected_date"
-    echo
-    echo -e "${BLUE}💡 You can now use this image in your Kubernetes deployment:${NC}"
-    echo "   image: $ACR_NAME.azurecr.io/$REPO_NAME:$selected_version_append_v"
-    echo
-    echo -e "${CYAN}🔄 Updated ACR status: This version now exists in your ACR${NC}"
-else
-    echo
-    echo -e "${RED}❌ Failed to import the image. Please check the error above.${NC}"
+  echo -e "${CYAN}🔎 Verifying access to ACR '$ACR_NAME'...${NC}"
+  if ! az acr show --name "$ACR_NAME" >/dev/null 2>&1; then
+    echo -e "${RED}❌ Cannot access ACR '$ACR_NAME'. Please check permissions or subscription context.${NC}"
+    echo -e "${YELLOW}Tip:${NC} Run ${BLUE}az account set --subscription <id>${NC} if you have multiple subscriptions."
     exit 1
+  fi
+
+  ORG="${DOCKER_REPO%%/*}"; REPO="${DOCKER_REPO##*/}"
+  TARGET_TAG_PREFIX="${TAG_PREFIX_IN_ACR:-v}"   # default "v" unless overridden from env
+  TARGET_TAG_PREFIX="${TARGET_TAG_PREFIX:-v}"   # fallback to v if unset/empty
+  persist_env "TAG_PREFIX_IN_ACR" "$TARGET_TAG_PREFIX"
+
+  TARGET_TAG="${TARGET_TAG_PREFIX}${SRC_TAG}"
+
+  echo
+  echo -e "${BLUE}📦 Importing docker.io/${DOCKER_REPO}:${SRC_TAG} → ${ACR_NAME}.azurecr.io/${REPO}:${TARGET_TAG}${NC}"
+  set +e
+  if [[ "$IS_PRIVATE" =~ ^[Yy]$ ]]; then
+    az acr import --name "$ACR_NAME" \
+      --source "docker.io/${DOCKER_REPO}:${SRC_TAG}" \
+      --image "${REPO}:${TARGET_TAG}" \
+      --username "$DOCKERHUB_USERNAME" \
+      --password "$DOCKERHUB_TOKEN"
+  else
+    az acr import --name "$ACR_NAME" \
+      --source "docker.io/${DOCKER_REPO}:${SRC_TAG}" \
+      --image "${REPO}:${TARGET_TAG}"
+  fi
+  rc=$?; set -e
+  if [ $rc -ne 0 ]; then
+    echo -e "${RED}❌ ACR import failed${NC}"; explain_env_persistence; exit $rc;
+  fi
+
+  echo -e "${GREEN}✅ Success!${NC}"
+  echo "Source : docker.io/${DOCKER_REPO}:${SRC_TAG}"
+  echo "Target : ${ACR_NAME}.azurecr.io/${REPO}:${TARGET_TAG}"
+
+else
+  # GHCR path
+  need docker
+  echo -e "${CYAN}🐙 Using GitHub Container Registry (ghcr.io)${NC}"
+  GHCR_NAMESPACE="${GHCR_NAMESPACE:-$(prompt_default "GHCR namespace (your GitHub username or org)" "")}"
+  while [ -z "$GHCR_NAMESPACE" ]; do GHCR_NAMESPACE="$(prompt_default "GHCR namespace (username/org)" "")"; done
+  persist_env "GHCR_NAMESPACE" "$GHCR_NAMESPACE"
+
+  # Default target repo = same leaf name as source repo
+  REPO_LEAF="${DOCKER_REPO##*/}"
+  GHCR_REPO="${GHCR_REPO:-$(prompt_default "GHCR repository name" "$REPO_LEAF")}"
+  persist_env "GHCR_REPO" "$GHCR_REPO"
+
+  echo "Do you want to login to Docker Hub and GHCR now (recommended)?"
+  DO_LOGIN="$(prompt_default "Login? (y/N)" "N")"
+
+  if [[ "$DO_LOGIN" =~ ^[Yy]$ ]]; then
+    if [[ "$IS_PRIVATE" =~ ^[Yy]$ ]]; then
+      echo -e "${CYAN}🔐 docker login docker.io (Docker Hub)${NC}"
+      echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin docker.io || { echo -e "${RED}Docker Hub login failed${NC}"; exit 1; }
+    fi
+    echo -e "${CYAN}🔐 docker login ghcr.io${NC}"
+    GHCR_USER="${GHCR_USER:-$(prompt_default "GHCR username (usually your GitHub handle)" "$GHCR_NAMESPACE")}"
+    GHCR_TOKEN="${GHCR_TOKEN:-$(prompt_default "GHCR PAT (write:packages) (will be stored in ${ENV_FILE})" "")}"
+    [ -n "$GHCR_TOKEN" ] || { echo -e "${RED}GHCR PAT required to push${NC}"; exit 1; }
+    persist_env "GHCR_USER" "$GHCR_USER"
+    persist_env "GHCR_TOKEN" "$GHCR_TOKEN"
+    echo "$GHCR_TOKEN" | docker login -u "$GHCR_USER" --password-stdin ghcr.io || { echo -e "${RED}GHCR login failed${NC}"; exit 1; }
+  fi
+
+  SRC_IMAGE="docker.io/${DOCKER_REPO}:${SRC_TAG}"
+  DST_IMAGE="ghcr.io/${GHCR_NAMESPACE}/${GHCR_REPO}:${SRC_TAG}"
+
+  echo
+  echo -e "${BLUE}⏬ docker pull ${SRC_IMAGE}${NC}"
+  docker pull "${SRC_IMAGE}" || { echo -e "${RED}Failed to pull source image${NC}"; explain_env_persistence; exit 1; }
+
+  echo -e "${BLUE}🏷 docker tag ${SRC_IMAGE} ${DST_IMAGE}${NC}"
+  docker tag "${SRC_IMAGE}" "${DST_IMAGE}"
+
+  echo -e "${BLUE}⏫ docker push ${DST_IMAGE}${NC}"
+  docker push "${DST_IMAGE}" || { echo -e "${RED}Failed to push to GHCR${NC}"; explain_env_persistence; exit 1; }
+
+  echo -e "${GREEN}✅ Success!${NC}"
+  echo "Source : ${SRC_IMAGE}"
+  echo "Target : ${DST_IMAGE}"
 fi
+
+explain_env_persistence
