@@ -1,20 +1,20 @@
-# Docker Image Importer v2.0
+# HARPOON Docker Image Importer v2.1
 
 ```
 ╔════════════════════════════════════════════════════════════════════════╗
 ║                                                                        ║
-║           ██████╗  ██████╗  ██████╗██╗  ██╗███████╗██████╗             ║
-║           ██╔══██╗██╔═══██╗██╔════╝██║ ██╔╝██╔════╝██╔══██╗            ║
-║           ██║  ██║██║   ██║██║     █████╔╝ █████╗  ██████╔╝            ║
-║           ██║  ██║██║   ██║██║     ██╔═██╗ ██╔══╝  ██╔══██╗            ║
-║           ██████╔╝╚██████╔╝╚██████╗██║  ██╗███████╗██║  ██║            ║
-║           ╚═════╝  ╚═════╝  ╚═════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝            ║
+║        ██╗  ██╗ █████╗ ██████╗ ██████╗  ██████╗  ██████╗ ███╗   ██╗   ║
+║        ██║  ██║██╔══██╗██╔══██╗██╔══██╗██╔═══██╗██╔═══██╗████╗  ██║   ║
+║        ███████║███████║██████╔╝██████╔╝██║   ██║██║   ██║██╔██╗ ██║   ║
+║        ██╔══██║██╔══██║██╔══██╗██╔═══╝ ██║   ██║██║   ██║██║╚██╗██║   ║
+║        ██║  ██║██║  ██║██║  ██║██║     ╚██████╔╝╚██████╔╝██║ ╚████║   ║
+║        ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝      ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝   ║
 ║                                                                        ║
-║                        IMAGE IMPORTER v2.0                             ║
+║                   HARPOON IMAGE IMPORTER v2.1                          ║
 ║                                                                        ║
 ║     🐳 Docker Hub  ──➤  📦 Container Registry  ──➤ ✅ Success           ║
 ║                                                                        ║
-║        Migrate container images from Docker Hub to ACR/GHCR            ║
+║      Migrate container images from Docker Hub to ACR/GHCR/LOCAL        ║
 ║                                                                        ║
 ╚════════════════════════════════════════════════════════════════════════╝
 ```
@@ -95,11 +95,11 @@ source ./docker_to_acr_importer.sh
 
 The script will guide you through:
 
-1. **Source Configuration**: Docker Hub repository details
+1. **Source Configuration**: Docker Hub repository details (reuses from `.nexops_import_env` if present, with option to proceed or change)
 2. **Authentication**: Credentials for private repositories (if needed)
 3. **Tag Selection**: Choose from available Docker Hub tags
-4. **Destination Registry**: Select ACR or GHCR
-5. **Import Process**: Automatic image migration
+4. **Destination Registry**: Select ACR, GHCR, or Local Docker (save/tag locally)
+5. **Import Process**: Automatic image migration (server-side for ACR; pull/tag/push for GHCR; pull/tag for Local)
 
 ## 📊 Example Output
 
@@ -144,7 +144,8 @@ Select a tag (1-5): 2
 🎯 Destination registry
 1) Azure Container Registry (ACR)
 2) GitHub Container Registry (GHCR)
-Choose destination [1/2]: 1
+3) Local Docker (save/tag locally)
+Choose destination [1/2/3]: 1
 
 🔎 Checking Azure CLI authentication...
 🔎 Verifying access to ACR 'myregistry'...
@@ -160,7 +161,8 @@ Target : myregistry.azurecr.io/nginx:v1.25.3
 ### ACR Import Workflow
 1. **Authentication**: Verifies Azure CLI login and ACR access
 2. **Source Selection**: Choose Docker Hub repository and tag
-3. **Direct Import**: Uses `az acr import` for efficient server-side copying
+3. **Tag Prefix Handling**: If the source tag already starts with `v`/`V`, no extra `v` is prefixed; otherwise the configured prefix (default `v`) is applied
+4. **Direct Import**: Uses `az acr import` for efficient server-side copying
 4. **Verification**: Confirms successful import
 
 ### GHCR Import Workflow
@@ -168,6 +170,11 @@ Target : myregistry.azurecr.io/nginx:v1.25.3
 2. **Source Selection**: Choose Docker Hub repository and tag
 3. **Pull-Tag-Push**: Downloads image locally, retags, and pushes to GHCR
 4. **Verification**: Confirms successful push
+
+### Local Docker Workflow
+1. **Source Selection**: Choose Docker Hub repository and tag
+2. **Pull-Tag**: Pulls from Docker Hub and tags locally as `<repo>:<tag>`
+3. **Verification**: Confirms local tag creation
 
 ## 🛠️ Advanced Usage
 
