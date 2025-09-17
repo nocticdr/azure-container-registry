@@ -38,18 +38,18 @@ trap on_exit EXIT
 
 echo "╔════════════════════════════════════════════════════════════════════════╗"
 echo "║                                                                        ║"
-echo "║           ██████╗  ██████╗  ██████╗██╗  ██╗███████╗██████╗             ║"
-echo "║           ██╔══██╗██╔═══██╗██╔════╝██║ ██╔╝██╔════╝██╔══██╗            ║"
-echo "║           ██║  ██║██║   ██║██║     █████╔╝ █████╗  ██████╔╝            ║"
-echo "║           ██║  ██║██║   ██║██║     ██╔═██╗ ██╔══╝  ██╔══██╗            ║"
-echo "║           ██████╔╝╚██████╔╝╚██████╗██║  ██╗███████╗██║  ██║            ║"
-echo "║           ╚═════╝  ╚═════╝  ╚═════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝            ║"
+echo "║        ██╗  ██╗ █████╗ ██████╗ ██████╗  ██████╗  ██████╗ ███╗   ██╗   ║"
+echo "║        ██║  ██║██╔══██╗██╔══██╗██╔══██╗██╔═══██╗██╔═══██╗████╗  ██║   ║"
+echo "║        ███████║███████║██████╔╝██████╔╝██║   ██║██║   ██║██╔██╗ ██║   ║"
+echo "║        ██╔══██║██╔══██║██╔══██╗██╔═══╝ ██║   ██║██║   ██║██║╚██╗██║   ║"
+echo "║        ██║  ██║██║  ██║██║  ██║██║     ╚██████╔╝╚██████╔╝██║ ╚████║   ║"
+echo "║        ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝      ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝   ║"
 echo "║                                                                        ║"
-echo "║                        IMAGE IMPORTER v2.0                             ║"
+echo "║                   DOCKER IMAGE IMPORTER v2.1                           ║"
 echo "║                                                                        ║"
 echo "║     🐳 Docker Hub  ──➤  📦 Container Registry  ──➤ ✅ Success          ║"
 echo "║                                                                        ║"
-echo "║        Migrate container images from Docker Hub to ACR/GHCR            ║"
+echo "║     Migrate container images from Docker Hub to ACR/GHCR/LOCAL         ║"
 echo "║                                                                        ║"
 echo "╚════════════════════════════════════════════════════════════════════════╝"
 echo
@@ -112,12 +112,21 @@ if [ -f "$ENV_FILE" ]; then
   set -a  # automatically export all variables
   source "$ENV_FILE"
   set +a
+
+  # If a previous Docker repo exists, offer to reuse it (default: proceed)
+  if [ -n "${DOCKER_REPO:-}" ]; then
+    echo -e "${CYAN}🔎 Found existing Docker repo in ${ENV_FILE}:${NC} ${GREEN}${DOCKER_REPO}${NC}"
+    reuse_choice="$(prompt_default "Proceed with this repository? (Y/n)" "Y")"
+    if [[ ! "$reuse_choice" =~ ^[Yy]$ ]]; then
+      DOCKER_REPO=""
+    fi
+  fi
 fi
 
 echo -e "${BLUE}🐳 Source: Docker Hub repository${NC}"
 need curl; need jq
 
-DOCKER_REPO="${DOCKER_REPO:-$(prompt_default "Enter Docker Hub repo (org/repo)" "")}"
+DOCKER_REPO="${DOCKER_REPO:-$(prompt_default "Enter Docker Hub repo (org/repo)" "")}" 
 while [[ ! "$DOCKER_REPO" =~ .+/.+ ]]; do
   echo -e "${RED}Please use the form org/repo${NC}"
   DOCKER_REPO="$(prompt_default "Enter Docker Hub repo (org/repo)" "")"
@@ -175,10 +184,11 @@ echo
 echo -e "${BLUE}🎯 Destination registry${NC}"
 echo "1) Azure Container Registry (ACR)"
 echo "2) GitHub Container Registry (GHCR)"
+echo "3) Local Docker (save/tag locally)"
 while :; do
-  read -r -p "Choose destination [1/2]: " DEST
-  [[ "$DEST" == "1" || "$DEST" == "2" ]] && break
-  echo -e "${RED}Please choose 1 or 2${NC}"
+  read -r -p "Choose destination [1/2/3]: " DEST
+  [[ "$DEST" == "1" || "$DEST" == "2" || "$DEST" == "3" ]] && break
+  echo -e "${RED}Please choose 1, 2 or 3${NC}"
 done
 
 if [ "$DEST" = "1" ]; then
@@ -206,8 +216,12 @@ ORG="${DOCKER_REPO%%/*}"; REPO="${DOCKER_REPO##*/}"
   TARGET_TAG_PREFIX="${TAG_PREFIX_IN_ACR:-v}"   # default "v" unless overridden from env
   TARGET_TAG_PREFIX="${TARGET_TAG_PREFIX:-v}"   # fallback to v if unset/empty
   persist_env "TAG_PREFIX_IN_ACR" "$TARGET_TAG_PREFIX"
-
-  TARGET_TAG="${TARGET_TAG_PREFIX}${SRC_TAG}"
+  # If source tag already starts with v/V, do not add another 'v'
+  if [[ "$SRC_TAG" =~ ^[vV] ]]; then
+    TARGET_TAG="$SRC_TAG"
+  else
+    TARGET_TAG="${TARGET_TAG_PREFIX}${SRC_TAG}"
+  fi
 
   # Check if the image already exists in ACR
   echo -e "${CYAN}🔍 Checking if image already exists in ACR...${NC}"
@@ -260,7 +274,7 @@ ORG="${DOCKER_REPO%%/*}"; REPO="${DOCKER_REPO##*/}"
   echo "Source : docker.io/${DOCKER_REPO}:${SRC_TAG}"
   echo "Target : ${ACR_NAME}.azurecr.io/${REPO}:${TARGET_TAG}"
 
-else
+elif [ "$DEST" = "2" ]; then
   # GHCR path
   need docker
   echo -e "${CYAN}🐙 Using GitHub Container Registry (ghcr.io)${NC}"
@@ -306,6 +320,18 @@ else
   echo -e "${GREEN}✅ Success!${NC}"
   echo "Source : ${SRC_IMAGE}"
   echo "Target : ${DST_IMAGE}"
+elif [ "$DEST" = "3" ]; then
+  # Local Docker path
+  need docker
+  SRC_IMAGE="docker.io/${DOCKER_REPO}:${SRC_TAG}"
+  LOCAL_REPO_LEAF="${DOCKER_REPO##*/}"
+  LOCAL_IMAGE="${LOCAL_REPO_LEAF}:${SRC_TAG}"
+  echo
+  echo -e "${BLUE}⏬ docker pull ${SRC_IMAGE}${NC}"
+  docker pull "${SRC_IMAGE}" || { echo -e "${RED}Failed to pull source image${NC}"; explain_env_persistence; exit 1; }
+  echo -e "${BLUE}🏷 docker tag ${SRC_IMAGE} ${LOCAL_IMAGE}${NC}"
+  docker tag "${SRC_IMAGE}" "${LOCAL_IMAGE}" || { echo -e "${RED}Failed to tag locally${NC}"; explain_env_persistence; exit 1; }
+  echo -e "${GREEN}✅ Saved locally as ${LOCAL_IMAGE}${NC}"
 fi
 
 explain_env_persistence
