@@ -38,12 +38,12 @@ trap on_exit EXIT
 
 echo "╔════════════════════════════════════════════════════════════════════════╗"
 echo "║                                                                        ║"
-echo "║        ██╗  ██╗ █████╗ ██████╗ ██████╗  ██████╗  ██████╗ ███╗   ██╗   ║"
-echo "║        ██║  ██║██╔══██╗██╔══██╗██╔══██╗██╔═══██╗██╔═══██╗████╗  ██║   ║"
-echo "║        ███████║███████║██████╔╝██████╔╝██║   ██║██║   ██║██╔██╗ ██║   ║"
-echo "║        ██╔══██║██╔══██║██╔══██╗██╔═══╝ ██║   ██║██║   ██║██║╚██╗██║   ║"
-echo "║        ██║  ██║██║  ██║██║  ██║██║     ╚██████╔╝╚██████╔╝██║ ╚████║   ║"
-echo "║        ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝      ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝   ║"
+echo "║      ██╗  ██╗ █████╗ ██████╗ ██████╗  ██████╗  ██████╗ ███╗   ██╗      ║"
+echo "║      ██║  ██║██╔══██╗██╔══██╗██╔══██╗██╔═══██╗██╔═══██╗████╗  ██║      ║"
+echo "║      ███████║███████║██████╔╝██████╔╝██║   ██║██║   ██║██╔██╗ ██║      ║"
+echo "║      ██╔══██║██╔══██║██╔══██╗██╔═══╝ ██║   ██║██║   ██║██║╚██╗██║      ║"
+echo "║      ██║  ██║██║  ██║██║  ██║██║     ╚██████╔╝╚██████╔╝██║ ╚████║      ║"
+echo "║      ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝      ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝      ║"
 echo "║                                                                        ║"
 echo "║                   DOCKER IMAGE IMPORTER v2.1                           ║"
 echo "║                                                                        ║"
@@ -123,13 +123,13 @@ if [ -f "$ENV_FILE" ]; then
   fi
 fi
 
-echo -e "${BLUE}🐳 Source: Docker Hub repository${NC}"
+echo -e "${BLUE}🐳 Source: Container image repository${NC}"
 need curl; need jq
 
-DOCKER_REPO="${DOCKER_REPO:-$(prompt_default "Enter Docker Hub repo (org/repo)" "")}" 
+DOCKER_REPO="${DOCKER_REPO:-$(prompt_default "Enter Docker repo (e.g. org/repo or registry.example.com/ns/repo)" "")}" 
 while [[ ! "$DOCKER_REPO" =~ .+/.+ ]]; do
-  echo -e "${RED}Please use the form org/repo${NC}"
-  DOCKER_REPO="$(prompt_default "Enter Docker Hub repo (org/repo)" "")"
+  echo -e "${RED}Please use the form org/repo or registry/namespace/repo${NC}"
+  DOCKER_REPO="$(prompt_default "Enter Docker repo" "")"
 done
 persist_env "DOCKER_REPO" "$DOCKER_REPO"
 
@@ -151,19 +151,28 @@ persist_env "IS_PRIVATE" "$IS_PRIVATE"
 echo
 
 echo -e "${BLUE}🔖 Choose a tag to import${NC}"
-echo -e "${CYAN}⏬ Fetching tags from Docker Hub...${NC}"
-ORG="${DOCKER_REPO%%/*}"; REPO="${DOCKER_REPO##*/}"
-  # Docker Hub tags API
-if [[ "$IS_PRIVATE" =~ ^[Yy]$ ]]; then
-    AUTH_HEADER="Authorization: Bearer $(curl -fsSL \
-    -H "Content-Type: application/json" \
-    -d "{\"username\":\"${DOCKERHUB_USERNAME}\",\"password\":\"${DOCKERHUB_TOKEN}\"}" \
-    https://hub.docker.com/v2/users/login/ | jq -r .token)"
-else
-    AUTH_HEADER=""
+
+# Determine if the reference is a simple Docker Hub path (org/repo) or a fully-qualified registry path
+FIRST_SEGMENT="${DOCKER_REPO%%/*}"
+IS_DOCKERHUB_SIMPLE=0
+if [[ ! "$FIRST_SEGMENT" =~ [.:] ]] && [[ "$FIRST_SEGMENT" != "localhost" ]]; then
+  IS_DOCKERHUB_SIMPLE=1
 fi
+
+if [ $IS_DOCKERHUB_SIMPLE -eq 1 ]; then
+  echo -e "${CYAN}⏬ Fetching tags from Docker Hub...${NC}"
+  ORG="${DOCKER_REPO%%/*}"; REPO="${DOCKER_REPO##*/}"
+  # Docker Hub tags API
+  if [[ "$IS_PRIVATE" =~ ^[Yy]$ ]]; then
+      AUTH_HEADER="Authorization: Bearer $(curl -fsSL \
+      -H "Content-Type: application/json" \
+      -d "{\"username\":\"${DOCKERHUB_USERNAME}\",\"password\":\"${DOCKERHUB_TOKEN}\"}" \
+      https://hub.docker.com/v2/users/login/ | jq -r .token)"
+  else
+      AUTH_HEADER=""
+  fi
   TAGS="$(curl -fsSL ${AUTH_HEADER:+-H "$AUTH_HEADER"} "https://hub.docker.com/v2/repositories/${ORG}/${REPO}/tags/?page_size=50")" \
-    || { echo -e "${RED}Failed to fetch Docker Hub tags${NC}"; exit 1; }
+      || { echo -e "${RED}Failed to fetch Docker Hub tags${NC}"; exit 1; }
   mapfile -t TROWS < <(echo "$TAGS" | jq -r '.results[]?.name' | grep -vE '^[0-9a-f]{12}$' | head -n 20)
   [ "${#TROWS[@]}" -gt 0 ] || { echo -e "${RED}No tags found on Docker Hub${NC}"; exit 1; }
 
@@ -179,6 +188,10 @@ fi
     echo -e "${RED}Invalid choice${NC}"
   done
   SRC_TAG="${TROWS[$((choice-1))]}"
+else
+  # Non-Docker Hub registry: prompt for tag directly
+  SRC_TAG="${SRC_TAG:-$(prompt_default "Enter tag for ${DOCKER_REPO}" "latest")}" 
+fi
 
 echo
 echo -e "${BLUE}🎯 Destination registry${NC}"
