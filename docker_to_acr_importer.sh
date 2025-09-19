@@ -229,8 +229,8 @@ ORG="${DOCKER_REPO%%/*}"; REPO="${DOCKER_REPO##*/}"
   TARGET_TAG_PREFIX="${TAG_PREFIX_IN_ACR:-v}"   # default "v" unless overridden from env
   TARGET_TAG_PREFIX="${TARGET_TAG_PREFIX:-v}"   # fallback to v if unset/empty
   persist_env "TAG_PREFIX_IN_ACR" "$TARGET_TAG_PREFIX"
-  # If source tag already starts with v/V, do not add another 'v'
-  if [[ "$SRC_TAG" =~ ^[vV] ]]; then
+  # If source tag starts with v/V OR equals 'latest', do not add prefix
+  if [[ "$SRC_TAG" =~ ^[vV] ]] || [[ "${SRC_TAG,,}" == "latest" ]]; then
     TARGET_TAG="$SRC_TAG"
   else
     TARGET_TAG="${TARGET_TAG_PREFIX}${SRC_TAG}"
