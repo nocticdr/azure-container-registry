@@ -264,18 +264,24 @@ ORG="${DOCKER_REPO%%/*}"; REPO="${DOCKER_REPO##*/}"
   fi
 
   echo
-  echo -e "${BLUE}📦 Importing docker.io/${DOCKER_REPO}:${SRC_TAG} → ${ACR_NAME}.azurecr.io/${REPO}:${TARGET_TAG}${NC}"
+  # Build source reference: if DOCKER_REPO is fully-qualified (has '.' or ':' or starts with localhost), do not prepend docker.io
+  if [[ "${DOCKER_REPO%%/*}" =~ [.:] ]] || [[ "${DOCKER_REPO%%/*}" == "localhost" ]]; then
+    SRC_REF="${DOCKER_REPO}:${SRC_TAG}"
+  else
+    SRC_REF="docker.io/${DOCKER_REPO}:${SRC_TAG}"
+  fi
+  echo -e "${BLUE}📦 Importing ${SRC_REF} → ${ACR_NAME}.azurecr.io/${REPO}:${TARGET_TAG}${NC}"
   
   set +e
   if [[ "$IS_PRIVATE" =~ ^[Yy]$ ]]; then
     az acr import --name "$ACR_NAME" \
-      --source "docker.io/${DOCKER_REPO}:${SRC_TAG}" \
+      --source "$SRC_REF" \
       --image "${REPO}:${TARGET_TAG}" \
       --username "$DOCKERHUB_USERNAME" \
       --password "$DOCKERHUB_TOKEN"
   else
     az acr import --name "$ACR_NAME" \
-      --source "docker.io/${DOCKER_REPO}:${SRC_TAG}" \
+      --source "$SRC_REF" \
       --image "${REPO}:${TARGET_TAG}"
   fi
   rc=$?; set -e
@@ -284,7 +290,7 @@ ORG="${DOCKER_REPO%%/*}"; REPO="${DOCKER_REPO##*/}"
   fi
 
   echo -e "${GREEN}✅ Success!${NC}"
-  echo "Source : docker.io/${DOCKER_REPO}:${SRC_TAG}"
+  echo "Source : ${SRC_REF}"
   echo "Target : ${ACR_NAME}.azurecr.io/${REPO}:${TARGET_TAG}"
 
 elif [ "$DEST" = "2" ]; then
@@ -317,7 +323,11 @@ elif [ "$DEST" = "2" ]; then
     echo "$GHCR_TOKEN" | docker login -u "$GHCR_USER" --password-stdin ghcr.io || { echo -e "${RED}GHCR login failed${NC}"; exit 1; }
   fi
 
-  SRC_IMAGE="docker.io/${DOCKER_REPO}:${SRC_TAG}"
+  if [[ "${DOCKER_REPO%%/*}" =~ [.:] ]] || [[ "${DOCKER_REPO%%/*}" == "localhost" ]]; then
+    SRC_IMAGE="${DOCKER_REPO}:${SRC_TAG}"
+  else
+    SRC_IMAGE="docker.io/${DOCKER_REPO}:${SRC_TAG}"
+  fi
   DST_IMAGE="ghcr.io/${GHCR_NAMESPACE}/${GHCR_REPO}:${SRC_TAG}"
 
   echo
@@ -336,7 +346,11 @@ elif [ "$DEST" = "2" ]; then
 elif [ "$DEST" = "3" ]; then
   # Local Docker path
   need docker
-  SRC_IMAGE="docker.io/${DOCKER_REPO}:${SRC_TAG}"
+  if [[ "${DOCKER_REPO%%/*}" =~ [.:] ]] || [[ "${DOCKER_REPO%%/*}" == "localhost" ]]; then
+    SRC_IMAGE="${DOCKER_REPO}:${SRC_TAG}"
+  else
+    SRC_IMAGE="docker.io/${DOCKER_REPO}:${SRC_TAG}"
+  fi
   LOCAL_REPO_LEAF="${DOCKER_REPO##*/}"
   LOCAL_IMAGE="${LOCAL_REPO_LEAF}:${SRC_TAG}"
   echo
